@@ -2797,13 +2797,11 @@ let maps = [
 		domain: "",
 		description: "A URI schema to represent a point in a coordinate reference system, which may show the location on the default map application.",
 		getUrl(lat, lon, zoom, extra) {
-			// Usually, geo uri represent a point(pin),
-			// not a map view. Therefore, if the source have pin,
-			// use the pin and discard the lat and lon.
-			if (extra && extra.pin_lat != null) {
-				[lat, lon] = [extra.pin_lat, extra.pin_lon];
-			}
-			return `geo:${lat},${lon}?z=${zoom}`;
+			// android extension for geo uri allow pin in `q`
+			// https://developers.google.com/maps/documentation/urls/android-intents#location_search
+			let u = `geo:${lat},${lon}?z=${zoom}`;
+			if (extra.pin_lat != null) u += `&q=${lat},${lon}`;
+			return u;
 		},
 		getLatLonZoom(url) {
 			let lat,
