@@ -449,7 +449,15 @@ function get_prev_url(){
 
 function commonGetUrl(lat, lon, zoom, extra) {
 	let url = this.map_format;
-	url = url.replace('{zoom}', zoom).replace('{latitude}', lat).replace('{longitude}', lon);
+	const d = {
+		longitude: lon, latitude: lat,
+		zoom, ...extra,
+	};
+	url = url.replace(/\{\w+\}/g, m => {
+		const k = m.slice(1,-1);
+		if (k in d) return encodeURIComponent(d[k]);
+		else return m;
+	});
 	return url;
 }
 let custom_maps =[
