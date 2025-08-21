@@ -12,7 +12,17 @@ function bboxToLatLonZoom(minlon, minlat, maxlon, maxlat) {
 }
 // -180 < lon < 180
 
-
+function labelDecode(code) {
+	return decodeURIComponent(code);
+}
+function labelEncode(plain) {
+	function percentEncode(c) {
+		return '%' + c.codePointAt(0).toString(16).toUpperCase();
+	}
+	// Burger+King is much prettier than Burger%20King
+	return plain.replace(/ /g, '+')
+		.replace(/[\(\)&#]/g, percentEncode);
+}
 
 function latLonZoomToBbox(lat, lon, zoom) {
   const tile_part = Math.pow(0.5, zoom);
@@ -100,11 +110,12 @@ let maps = [
 					
 				}
 				*/
-				let pin_match = url.match(/google.*maps\/place\/.*!3d(-?\d[0-9.]*)!4d(-?\d[0-9.]*)/);
-				if (pin_match) {
+				let match = url.match(/google.*maps\/place\/([^\/]*)\/.*!3d(-?\d[0-9.]*)!4d(-?\d[0-9.]*)/);
+				if (match) {
 					extra = {
-						pin_lat: pin_match[1],
-						pin_lon: pin_match[2],
+						label: labelDecode(match[1]),
+						pin_lat: match[2],
+						pin_lon: match[3],
 					};
 				}
 
@@ -343,6 +354,10 @@ let maps = [
 			let pin = "";
 			if (extra && extra.pin_lat) {
 				pin = `&sp=point.${extra.pin_lat}_${extra.pin_lon}`; // + `${name}_${note}`;
+				if (extra.label) {
+					pin += '_' + labelEncode(extra.label)
+						.replace(/_/g, '%5F');
+				}
 			}
 			return "https://www.bing.com/maps?cp=" + lat + "~" + lon + "&lvl=" + zoom + pin;
 		},
@@ -361,8 +376,16 @@ let maps = [
 
 			const pin = u.get("sp");
 			if (pin) {
-				const scan = pin.match(/point\.([\d.]+)_([\d.]+)/);
-				if (scan) ret.push({ pin_lat: scan[1], pin_lon: scan[2] });
+				const scan = pin.match(/point\.([\d.]+)_([\d.]+)(_?.*)/);
+				const extra = {};
+				if (scan) {
+					extra.pin_lat = scan[1];
+					extra.pin_lon = scan[2];
+					if (scan[3]) {
+						extra.label = labelDecode(scan[3].slice(1));
+					}
+					ret.push(extra);
+				}
 			}
 			return ret;
 		},
@@ -1246,9 +1269,27 @@ let maps = [
 		domain: "apple.com",
 		getUrl(lat, lon, zoom, extra) {
 			if (extra){
-				return "http://maps.apple.com/place?ll=" + extra.pin_lat + "," + extra.pin_lon;
+				let u = "http://maps.apple.com/place?ll=" + extra.pin_lat + "," + extra.pin_lon;
+				if (extra.label) {
+					u += '&q=' + labelEncode(extra.label);
+				}
+				return u;
 			}
 			return "http://maps.apple.com/?ll=" + lat + "," + lon + "&z=" + zoom;
+		},
+		getLatLonZoom(url) {
+			const u = new URL(url);
+			const q = u.searchParams;
+			let lat, lon, zoom = 16, extra = {};
+			if (q.has('ll')) {
+				[lat,lon] = q.get('ll').split(',');
+			}
+			if (q.has('z')) zoom = q.get('z');
+			if (q.has('q')) extra.label = q.get('q');
+			if (u.pathname == '/place') {
+				[extra.pin_lat, extra.pin_lon] = [lat, lon];
+			}
+			return [lat, lon, zoom, extra];
 		},
 	},
 
@@ -1380,9 +1421,11 @@ let maps = [
 		default_check: false,
 		domain: "wmflabs.org",
 		description: "Map links for Wikipedia articles",
-		getUrl(lat, lon, zoom) {
+		getUrl(lat, lon, zoom, extra) {
 			//https://www.mediawiki.org/wiki/GeoHack
-			return "https://tools.wmflabs.org/geohack/geohack.php?params=" + lat + "_N_" + lon + "_E_scale:" + Math.round(100000 * Math.pow(2, 12 - Number(zoom)));
+			let u = "https://tools.wmflabs.org/geohack/geohack.php?params=" + lat + "_N_" + lon + "_E_scale:" + Math.round(100000 * Math.pow(2, 12 - Number(zoom)));
+			if (extra && extra.label) u += '&title=' + labelDecode(extra.label);
+			return u;
 		},
 	},
 	{
@@ -1392,8 +1435,10 @@ let maps = [
 		default_check: false,
 		domain: "wmflabs.org",
 		description: "Map links for Wikipedia articles with lang support",
-		getUrl(lat, lon, zoom) {
-			return `https://tools.wmflabs.org/geohack/geohack.php?${navigator.language ? "language=" + navigator.language + "&" : ""}params=${lat}_N_${lon}_E_scale:${Math.round(100000 * Math.pow(2, 12 - Number(zoom)))}`;
+		getUrl(lat, lon, zoom, extra) {
+			let u = `https://tools.wmflabs.org/geohack/geohack.php?${navigator.language ? "language=" + navigator.language + "&" : ""}params=${lat}_N_${lon}_E_scale:${Math.round(100000 * Math.pow(2, 12 - Number(zoom)))}`;
+			if (extra && extra.label) u += '&title=' + labelDecode(extra.label);
+			return u;
 		},
 	},
 
@@ -2800,7 +2845,13 @@ let maps = [
 			// android extension for geo uri allow pin in `q`
 			// https://developers.google.com/maps/documentation/urls/android-intents#location_search
 			let u = `geo:${lat},${lon}?z=${zoom}`;
-			if (extra.pin_lat != null) u += `&q=${lat},${lon}`;
+			let q = '';
+			if (extra.pin_lat != null) q = `${lat},${lon}`;
+			if (extra.label) {
+				if (!q) q = `${lat},${lon}`;
+				q += `(${labelEncode(extra.label)})`;
+			}
+			if (q) u += '&q=' + q;
 			return u;
 		},
 		getLatLonZoom(url) {
@@ -2810,9 +2861,11 @@ let maps = [
 
 			const u = new URL(url);
 			const latlonRegexp = /(-?\d[0-9.]*),(-?\d[0-9.]*)/;
+			const labelRegexp = /\((.+)\)\s*$/;
 			const latlon = u.pathname.match(latlonRegexp);
 			if (!latlon) return;
 			[, lat, lon] = latlon;
+			const extra = {};
 			if (u.search) {
 				const z = u.searchParams.get("z");
 				if (z) zoom = z;
@@ -2826,13 +2879,21 @@ let maps = [
 					latlon = q.match(latlonRegexp);
 				}
 				if (latlon) [, lat, lon] = latlon;
+
+				const label_match = q.match(labelRegexp);
+				if (label_match) {
+					extra.label = labelDecode(label_match[1]);
+				}
 			}
 			lon = normalizeLon(lon);
+			// treat geo uri as a pin url
+			extra.pin_lat = lat;
+			extra.pin_lon = lon;
 			return [
 				lat,
 				lon,
 				zoom,
-				{ pin_lat: lat, pin_lon: lon }, // treat geo uri as a pin url
+				extra,
 			];
 		},
 	},
